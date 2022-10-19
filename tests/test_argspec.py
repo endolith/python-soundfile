@@ -11,8 +11,11 @@ pytestmark = pytest.mark.skipif(sys.version_info < (3, 3),
 
 def defaults(func):
     from inspect import signature
-    return dict((k, v) for k, v in signature(func).parameters.items()
-                if v.default is not v.empty)
+    return {
+        k: v
+        for k, v in signature(func).parameters.items()
+        if v.default is not v.empty
+    }
 
 
 def remove_items(collection, subset):

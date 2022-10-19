@@ -8,6 +8,7 @@ Alternatively, sound files can be opened as `SoundFile` objects.
 For further information, see https://python-soundfile.readthedocs.io/.
 
 """
+
 __version__ = "0.10.3"
 
 import os as _os
@@ -146,7 +147,7 @@ except OSError:
         _libname = 'libsndfile.dylib'
     elif _sys.platform == 'win32':
         from platform import architecture as _architecture
-        _libname = 'libsndfile' + _architecture()[0] + '.dll'
+        _libname = f'libsndfile{_architecture()[0]}.dll'
     else:
         raise
 
@@ -307,10 +308,7 @@ def write(file, data, samplerate, subtype=None, endian=None, format=None,
     """
     import numpy as np
     data = np.asarray(data)
-    if data.ndim == 1:
-        channels = 1
-    else:
-        channels = data.shape[1]
+    channels = 1 if data.ndim == 1 else data.shape[1]
     with SoundFile(file, 'w', samplerate, channels,
                    subtype, endian, format, closefd) as f:
         f.write(data)
@@ -368,11 +366,11 @@ def blocks(file, blocksize=None, overlap=0, frames=-1, start=0, stop=None,
 
     """
     with SoundFile(file, 'r', samplerate, channels,
-                   subtype, endian, format, closefd) as f:
+                       subtype, endian, format, closefd) as f:
         frames = f._prepare_read(start, stop, frames)
-        for block in f.blocks(blocksize, overlap, frames,
-                              dtype, always_2d, fill_value, out):
-            yield block
+        yield from f.blocks(
+            blocksize, overlap, frames, dtype, always_2d, fill_value, out
+        )
 
 
 class _SoundFileInfo(object):
@@ -478,8 +476,11 @@ def available_subtypes(format=None):
     """
     subtypes = _available_formats_helper(_snd.SFC_GET_FORMAT_SUBTYPE_COUNT,
                                          _snd.SFC_GET_FORMAT_SUBTYPE)
-    return dict((subtype, name) for subtype, name in subtypes
-                if format is None or check_format(format, subtype))
+    return {
+        subtype: name
+        for subtype, name in subtypes
+        if format is None or check_format(format, subtype)
+    }
 
 
 def check_format(format, subtype=None, endian=None):
@@ -705,13 +706,12 @@ class SoundFile(object):
 
     def __getattr__(self, name):
         """Read text meta-data in the sound file through properties."""
-        if name in _str_types:
-            self._check_if_closed()
-            data = _snd.sf_get_string(self._file, _str_types[name])
-            return _ffi.string(data).decode('utf-8', 'replace') if data else ""
-        else:
+        if name not in _str_types:
             raise AttributeError(
                 "'SoundFile' object has no attribute {0!r}".format(name))
+        self._check_if_closed()
+        data = _snd.sf_get_string(self._file, _str_types[name])
+        return _ffi.string(data).decode('utf-8', 'replace') if data else ""
 
     def __len__(self):
         # Note: This is deprecated and will be removed at some point,
@@ -860,9 +860,8 @@ class SoundFile(object):
         if out is None:
             frames = self._check_frames(frames, fill_value)
             out = self._create_empty_array(frames, always_2d, dtype)
-        else:
-            if frames < 0 or frames > len(out):
-                frames = len(out)
+        elif frames < 0 or frames > len(out):
+            frames = len(out)
         frames = self._array_io('read', out, frames)
         if len(out) > frames:
             if fill_value is None:
@@ -901,7 +900,7 @@ class SoundFile(object):
         """
         frames = self._check_frames(frames, fill_value=None)
         ctype = self._check_dtype(dtype)
-        cdata = _ffi.new(ctype + '[]', frames * self.channels)
+        cdata = _ffi.new(f'{ctype}[]', frames * self.channels)
         read_frames = self._cdata_io('read', cdata, ctype, frames)
         assert read_frames == frames
         return _ffi.buffer(cdata)
@@ -1126,10 +1125,12 @@ class SoundFile(object):
         """
         if frames is None:
             frames = self.tell()
-        err = _snd.sf_command(self._file, _snd.SFC_FILE_TRUNCATE,
-                              _ffi.new("sf_count_t*", frames),
-                              _ffi.sizeof("sf_count_t"))
-        if err:
+        if err := _snd.sf_command(
+            self._file,
+            _snd.SFC_FILE_TRUNCATE,
+            _ffi.new("sf_count_t*", frames),
+            _ffi.sizeof("sf_count_t"),
+        ):
             # get the actual error code
             err = _snd.sf_error(self._file)
             raise LibsndfileError(err, "Error truncating the file")
@@ -1219,7 +1220,7 @@ class SoundFile(object):
                 data = file.read(count)
                 data_read = len(data)
                 buf = _ffi.buffer(ptr, data_read)
-                buf[0:data_read] = data
+                buf[:data_read] = data
             return data_read
 
         @_ffi.callback("sf_vio_write")
@@ -1311,7 +1312,7 @@ class SoundFile(object):
             raise ValueError("Data must be C-contiguous")
         ctype = self._check_dtype(array.dtype.name)
         assert array.dtype.itemsize == _ffi.sizeof(ctype)
-        cdata = _ffi.cast(ctype + '*', array.__array_interface__['data'][0])
+        cdata = _ffi.cast(f'{ctype}*', array.__array_interface__['data'][0])
         return self._cdata_io(action, cdata, ctype, frames)
 
     def _cdata_io(self, action, data, ctype, frames):
@@ -1320,7 +1321,7 @@ class SoundFile(object):
         self._check_if_closed()
         if self.seekable():
             curr = self.tell()
-        func = getattr(_snd, 'sf_' + action + 'f_' + ctype)
+        func = getattr(_snd, f'sf_{action}f_{ctype}')
         frames = func(self._file, data, frames)
         _error_check(self._errorcode)
         if self.seekable():
@@ -1402,12 +1403,11 @@ def _check_mode(mode):
         raise ValueError("mode must contain exactly one of 'xrw'")
 
     if '+' in mode_set:
-        mode_int = _snd.SFM_RDWR
+        return _snd.SFM_RDWR
     elif 'r' in mode_set:
-        mode_int = _snd.SFM_READ
+        return _snd.SFM_READ
     else:
-        mode_int = _snd.SFM_WRITE
-    return mode_int
+        return _snd.SFM_WRITE
 
 
 def _create_info_struct(file, mode, samplerate, channels,
@@ -1429,11 +1429,10 @@ def _create_info_struct(file, mode, samplerate, channels,
             raise TypeError("channels must be specified")
         info.channels = channels
         info.format = _format_int(format, subtype, endian)
-    else:
-        if any(arg is not None for arg in (
+    elif any(arg is not None for arg in (
                 samplerate, channels, original_format, subtype, endian)):
-            raise TypeError("Not allowed for existing files (except 'RAW'): "
-                            "samplerate, channels, format, subtype, endian")
+        raise TypeError("Not allowed for existing files (except 'RAW'): "
+                        "samplerate, channels, format, subtype, endian")
     return info
 
 
@@ -1463,12 +1462,11 @@ def _get_format_from_filename(file, mode):
 
 def _format_str(format_int):
     """Return the string representation of a given numeric format."""
-    for dictionary in _formats, _subtypes, _endians:
+    for dictionary in (_formats, _subtypes, _endians):
         for k, v in dictionary.items():
             if v == format_int:
                 return k
-    else:
-        return 'n/a'
+    return 'n/a'
 
 
 def _format_info(format_int, format_flag=_snd.SFC_GET_FORMAT_INFO):

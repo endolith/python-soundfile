@@ -25,7 +25,7 @@ architecture0 = os.environ.get('PYSOUNDFILE_ARCHITECTURE', architecture()[0])
 if platform == 'darwin':
     libname = 'libsndfile.dylib'
 elif platform == 'win32':
-    libname = 'libsndfile' + architecture0 + '.dll'
+    libname = f'libsndfile{architecture0}.dll'
 else:
     libname = None
 
@@ -70,14 +70,11 @@ else:
         """Create OS-dependent, but Python-independent wheels."""
 
         def get_tag(self):
-            pythons = 'py2.py3.' + PYTHON_INTERPRETERS
+            pythons = f'py2.py3.{PYTHON_INTERPRETERS}'
             if platform == 'darwin':
                 oses = MACOSX_VERSIONS
             elif platform == 'win32':
-                if architecture0 == '32bit':
-                    oses = 'win32'
-                else:
-                    oses = 'win_amd64'
+                oses = 'win32' if architecture0 == '32bit' else 'win_amd64'
             else:
                 pythons = 'py2.py3'
                 oses = 'any'
